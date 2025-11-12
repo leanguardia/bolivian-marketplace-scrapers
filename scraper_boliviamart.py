@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 import csv
 import time
 import re
+import json
 from urllib.parse import urljoin, urlparse, parse_qs
 import logging
 from typing import List, Dict, Optional
@@ -26,17 +27,17 @@ logger = logging.getLogger(__name__)
 class BoliviamartScraper:
     """Web scraper for Boliviamart.com product pages"""
     
-    def __init__(self, base_url: str, page_size: int = 32, delay: float = 1.0):
+    def __init__(self, base_url: str, page_size: int = 36, delay: float = 1.0):
         """
         Initialize the scraper
         
         Args:
             base_url: The base URL of the store
-            page_size: Number of products per page (max 32)
+            page_size: Number of products per page (max 36)
             delay: Delay between requests in seconds
         """
         self.base_url = base_url
-        self.page_size = min(page_size, 32)  # Max is 32
+        self.page_size = min(page_size, 36)  # Max is 32
         self.delay = delay
         self.session = requests.Session()
         self.session.headers.update({
@@ -95,18 +96,22 @@ class BoliviamartScraper:
         
         return prices
     
-    def extract_product_info(self, product_element) -> Optional[Dict]:
+    def extract_product_info(self, product_element, category_name: str = 'N/A') -> Optional[Dict]:
         """
         Extract product information from a product element
         
         Args:
-            product_element: BeautifulSoup element containing product
+            product_element: BeautifulSoup element <li> containing product
+            category_name: Name of the category being scraped
             
         Returns:
             Dictionary with product information
         """
         try:
             product_data = {}
+            
+            # Category from scraping path
+            product_data['scrape_category'] = category_name
             
             # Product title
             title_elem = product_element.find('h3', class_='woocommerce-loop-product__title')
@@ -233,12 +238,13 @@ class BoliviamartScraper:
             logger.error(f"Error getting total pages: {e}")
             return 1
     
-    def scrape_page(self, url: str) -> List[Dict]:
+    def scrape_page(self, url: str, category_name: str = 'N/A') -> List[Dict]:
         """
         Scrape all products from a single page
         
         Args:
             url: URL of the page to scrape
+            category_name: Name of the category being scraped
             
         Returns:
             List of product dictionaries
@@ -252,6 +258,36 @@ class BoliviamartScraper:
         # Find all product elements
         product_elements = soup.find_all('li', class_='product-col')
         
+        # Check if products are skeleton placeholders (empty or no title)
+        # This happens when products are loaded via JavaScript
+        if product_elements:
+            first_product = product_elements[0]
+            has_content = first_product.find('h3', class_='woocommerce-loop-product__title')
+            
+            if not has_content:
+                # Products are skeleton placeholders, get from script template
+                logger.info("Products are skeleton placeholders, checking script templates...")
+                product_elements = []
+        
+        # If no products found or they're empty, try script template
+        if not product_elements:
+            script_tags = soup.find_all('script', type='text/template')
+            
+            for script in script_tags:
+                script_content = script.string
+                if script_content and 'product-col' in script_content and 'woocommerce-loop-product__title' in script_content:
+                    # Parse the escaped HTML content
+                    try:
+                        # The content is a JSON string containing escaped HTML
+                        unescaped_html = json.loads(script_content)
+                        template_soup = BeautifulSoup(unescaped_html, 'html.parser')
+                        product_elements = template_soup.find_all('li', class_='product-col')
+                        logger.info(f"Found {len(product_elements)} products in script template")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Could not parse script template: {e}")
+                        continue
+        
         if not product_elements:
             logger.warning(f"No products found on page: {url}")
             return products
@@ -259,18 +295,19 @@ class BoliviamartScraper:
         logger.info(f"Found {len(product_elements)} products on page")
         
         for product_elem in product_elements:
-            product_data = self.extract_product_info(product_elem)
+            product_data = self.extract_product_info(product_elem, category_name)
             if product_data:
                 products.append(product_data)
         
         return products
     
-    def scrape_all(self, start_url: str) -> List[Dict]:
+    def scrape_all(self, start_url: str, category_name: str = 'N/A') -> List[Dict]:
         """
         Scrape all products from all pages
         
         Args:
             start_url: Starting URL
+            category_name: Name of the category being scraped
             
         Returns:
             List of all products
@@ -294,7 +331,7 @@ class BoliviamartScraper:
         
         # Scrape first page
         logger.info(f"Scraping page 1/{total_pages}")
-        products = self.scrape_page(first_page_url)
+        products = self.scrape_page(first_page_url, category_name)
         all_products.extend(products)
         
         # Scrape remaining pages
@@ -304,7 +341,7 @@ class BoliviamartScraper:
             page_url = f"{parsed_url.scheme}://{parsed_url.netloc}{base_path}/page/{page_num}/?count={self.page_size}"
             logger.info(f"Scraping page {page_num}/{total_pages}")
             
-            products = self.scrape_page(page_url)
+            products = self.scrape_page(page_url, category_name)
             all_products.extend(products)
         
         logger.info(f"Total products scraped: {len(all_products)}")
@@ -324,6 +361,7 @@ class BoliviamartScraper:
         
         # Define CSV columns
         fieldnames = [
+            'scrape_category',
             'product_id',
             'sku',
             'title',
@@ -355,34 +393,114 @@ def main():
     """Main function"""
     import sys
     
-    # Default URL
-    url = "https://www.boliviamart.com/tienda/"
+    # Define all categories to scrape
+    base_domain = "https://www.boliviamart.com"
+    categories = [
+        ("/tienda", "Tienda General"),
+        ("/categoria/audio", "Audio"),
+        ("/categoria/celulares-y-tablets", "Celulares y Tablets"),
+        ("/categoria/computacion", "Computación"),
+        ("/categoria/deportes-y-aire-libre", "Deportes y Aire Libre"),
+        ("/categoria/educacion-y-oficina", "Educación y Oficina"),
+        ("/categoria/electrodomesticos", "Electrodomésticos"),
+        ("/categoria/foto-y-video", "Foto y Video"),
+        ("/categoria/herramientas-y-ferreteria", "Herramientas y Ferretería"),
+        ("/categoria/hogar-y-jardin", "Hogar y Jardín"),
+        ("/categoria/salud-y-belleza", "Salud y Belleza"),
+        ("/categoria/seguridad", "Seguridad"),
+        ("/categoria/telefonia-y-comunicaciones", "Telefonía y Comunicaciones"),
+        ("/categoria/videojuegos-y-consolas", "Videojuegos y Consolas"),
+    ]
     
-    # Check if URL provided as argument
+    # Allow single URL scraping if provided as argument
     if len(sys.argv) > 1:
-        url = sys.argv[1]
+        single_url = sys.argv[1]
+        logger.info(f"Single URL mode: {single_url}")
+        
+        # Determine category name from URL
+        parsed = urlparse(single_url)
+        category_name = parsed.path.split('/')[-1] or "General"
+        
+        scraper = BoliviamartScraper(
+            base_url=single_url,
+            page_size=36,
+            delay=1.0
+        )
+        
+        products = scraper.scrape_all(single_url, category_name)
+        
+        if products:
+            output_filename = 'boliviamart_products.csv'
+            scraper.save_to_csv(products, output_filename)
+            logger.info(f"Scraping complete! Data saved to {output_filename}")
+            logger.info(f"Total products: {len(products)}")
+        else:
+            logger.error("No products were scraped")
+        return
     
-    logger.info(f"Starting Boliviamart scraper for: {url}")
-    logger.info("This will scrape all products with pagination size set to 32")
+    # Multi-category scraping mode
+    logger.info("="*60)
+    logger.info("Starting FULL Boliviamart scraper")
+    logger.info(f"Will scrape {len(categories)} categories")
+    logger.info("="*60)
+    
+    all_products = []
+    page_size = 36
     
     # Initialize scraper
     scraper = BoliviamartScraper(
-        base_url=url,
-        page_size=32,  # Maximum page size
-        delay=1.0  # 1 second delay between requests
+        base_url=base_domain,
+        page_size=page_size,
+        delay=1.0
     )
     
-    # Scrape all products
-    products = scraper.scrape_all(url)
+    # Scrape each category
+    for idx, (path, category_name) in enumerate(categories, 1):
+        url = base_domain + path
+        
+        logger.info("")
+        logger.info("="*60)
+        logger.info(f"Category {idx}/{len(categories)}: {category_name}")
+        logger.info(f"URL: {url}")
+        logger.info("="*60)
+        
+        try:
+            products = scraper.scrape_all(url, category_name)
+            all_products.extend(products)
+            logger.info(f"✓ {category_name}: {len(products)} products scraped")
+        except Exception as e:
+            logger.error(f"✗ {category_name}: Error - {e}")
+            continue
+        
+        # Add delay between categories
+        if idx < len(categories):
+            time.sleep(2.0)
     
-    # Save to CSV
-    if products:
+    # Save all products to CSV
+    if all_products:
         output_filename = 'boliviamart_products.csv'
-        scraper.save_to_csv(products, output_filename)
-        logger.info(f"Scraping complete! Data saved to {output_filename}")
-        logger.info(f"Total products: {len(products)}")
+        scraper.save_to_csv(all_products, output_filename)
+        
+        logger.info("")
+        logger.info("="*60)
+        logger.info("SCRAPING COMPLETE!")
+        logger.info("="*60)
+        logger.info(f"Total products scraped: {len(all_products)}")
+        logger.info(f"Data saved to: {output_filename}")
+        logger.info(f"Categories scraped: {len(categories)}")
+        
+        # Show breakdown by category
+        logger.info("")
+        logger.info("Breakdown by category:")
+        category_counts = {}
+        for product in all_products:
+            cat = product.get('scrape_category', 'Unknown')
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+        
+        for cat, count in sorted(category_counts.items()):
+            logger.info(f"  {cat}: {count} products")
     else:
-        logger.error("No products were scraped")
+        logger.error("No products were scraped from any category")
 
 
 if __name__ == "__main__":

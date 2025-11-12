@@ -46,11 +46,11 @@ def test_product_extraction():
     
     scraper = BoliviamartScraper(
         base_url="https://www.boliviamart.com/tienda/",
-        page_size=12,
+        page_size=32,
         delay=1.0
     )
     
-    url = "https://www.boliviamart.com/tienda/?count=12"
+    url = "https://www.boliviamart.com/tienda/?count=32"
     products = scraper.scrape_page(url)
     
     if products and len(products) > 0:
@@ -61,6 +61,10 @@ def test_product_extraction():
         first_product = products[0]
         for key, value in first_product.items():
             print(f"  {key}: {value}")
+
+        if first_product["title"] != "ACCESO CON LECTOR BIOMETRICO 5Y0A 5YBM1A":
+            print("✗ First product title does not match expected value")
+            return False
         
         return True
     else:
