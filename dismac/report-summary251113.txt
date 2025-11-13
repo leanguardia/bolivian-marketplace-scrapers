@@ -1,0 +1,26 @@
+================================================================================
+Saving results to dismac_categories_report.csv...
+✓ Saved 243 categories to dismac_categories_report.csv
+================================================================================
+SUMMARY
+================================================================================
+Total categories processed: 243
+Categories with products: 185
+Total products found: 9264
+
+Top 10 categories by product count:
+--------------------------------------------------------------------------------
+ 1. Hogar y muebles: 1190 productos
+ 2. Infantil y juguetes: 307 productos
+ 3. Exteriores: 298 productos
+ 4. Moda y accesorios: 276 productos
+ 5. Colchones (Hogar y muebles > Camas y colchones): 267 productos
+ 6. Climatización: 238 productos
+ 7. Accesorios computación (Tecnología > Computación): 235 productos
+ 8. Cuidado personal: 226 productos
+ 9. Herramientas y maquinaria: 225 productos
+10. Mochilas (Tecnología > Computación): 176 productos
+
+================================================================================
+Scraping completed at: 2025-11-13 00:28:51
+================================================================================
